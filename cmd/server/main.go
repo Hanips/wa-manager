@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -117,7 +118,7 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Simply redirect to a public QR code generator to show the QR easily
-	qrURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s", qrCode)
+	qrURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=%s", url.QueryEscape(qrCode))
 	html := fmt.Sprintf(`
 		<html>
 		<head><title>WhatsApp Login</title></head>
