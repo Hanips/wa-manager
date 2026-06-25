@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: wasender
+    env: go
+    buildCommand: go build -o server ./cmd/server
+    startCommand: ./server
+    envVars:
+      - key: DATABASE_URL
+        sync: false # Set this manually in Render dashboard to your Neon.tech DB URL
+      - key: API_KEY
+        sync: false # Optional: Set to secure your /send endpoint
