@@ -42,6 +42,11 @@ func main() {
 		log.Fatal("DATABASE_URL environment variable is required (e.g. from Neon.tech)")
 	}
 
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		log.Fatal("API_KEY environment variable is required for security! Silakan atur di Environment Variables Render.com")
+	}
+
 	// Connect to PostgreSQL (Neon.tech or similar)
 	container, err := sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
 	if err != nil {
@@ -180,7 +185,8 @@ func eventHandler(evt interface{}) {
 							"timestamp": time.Now().Format(time.RFC3339),
 						}
 						body, _ := json.Marshal(payload)
-						http.Post(hookURL, "application/json", bytes.NewBuffer(body))
+						httpClient := &http.Client{Timeout: 10 * time.Second}
+						httpClient.Post(hookURL, "application/json", bytes.NewBuffer(body))
 					}
 				}(v.Info.Sender.User, v.Info.PushName)
 			}
@@ -193,6 +199,10 @@ func eventHandler(evt interface{}) {
 			msgText = v.Message.GetConversation()
 		} else if v.Message.GetExtendedTextMessage() != nil {
 			msgText = v.Message.GetExtendedTextMessage().GetText()
+		} else if v.Message.GetImageMessage() != nil {
+			msgText = v.Message.GetImageMessage().GetCaption()
+		} else if v.Message.GetDocumentMessage() != nil {
+			msgText = v.Message.GetDocumentMessage().GetCaption()
 		}
 
 		// Panggil Webhook jika ada
@@ -208,7 +218,8 @@ func eventHandler(evt interface{}) {
 					"timestamp": time.Now().Format(time.RFC3339),
 				}
 				body, _ := json.Marshal(payload)
-				http.Post(hookURL, "application/json", bytes.NewBuffer(body))
+				httpClient := &http.Client{Timeout: 10 * time.Second}
+				httpClient.Post(hookURL, "application/json", bytes.NewBuffer(body))
 			}
 		}(v.Info.Sender.User, v.Info.PushName, msgText)
 
@@ -249,7 +260,8 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WA Manager Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"    <style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
         :root {
             --bg-color: #f5f5f7;
             --card-bg: rgba(255, 255, 255, 0.8);
