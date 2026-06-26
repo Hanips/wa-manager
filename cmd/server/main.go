@@ -175,6 +175,12 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleQR(w http.ResponseWriter, r *http.Request) {
+	apiKey := os.Getenv("API_KEY")
+	if apiKey != "" && r.URL.Query().Get("key") != apiKey {
+		http.Error(w, "Unauthorized. Akses ditolak! Gunakan URL: /qr?key=API_KEY_ANDA", http.StatusUnauthorized)
+		return
+	}
+
 	if client.Store.ID != nil {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Already logged in!"))
