@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	_ "github.com/lib/pq"
 	"go.mau.fi/whatsmeow"
@@ -63,6 +64,13 @@ func main() {
 				if evt.Event == "code" {
 					qrCode = evt.Code
 					fmt.Println("QR code available. Visit /qr to see it or generate it from this string:", evt.Code)
+				} else if evt.Event == "timeout" {
+					fmt.Println("QR code expired (timeout). Restarting server to generate a new one...")
+					qrCode = ""
+					go func() {
+						client.Disconnect()
+						os.Exit(0)
+					}()
 				} else {
 					fmt.Println("Login event:", evt.Event)
 				}
@@ -110,6 +118,12 @@ func main() {
 
 func eventHandler(evt interface{}) {
 	switch v := evt.(type) {
+	case events.PermanentDisconnect:
+		fmt.Printf("Fatal Error (Permanent Disconnect): %s. Menghentikan dan me-restart server...\n", v.PermanentDisconnectDescription())
+		go func() {
+			client.Disconnect()
+			os.Exit(0)
+		}()
 	case *events.Message:
 		// Abaikan pesan dari diri sendiri
 		if v.Info.IsFromMe {
@@ -158,7 +172,11 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if client.Store.ID == nil {
-		w.Write([]byte("Belum ada akun WhatsApp yang login."))
+		w.Write([]byte("Sesi kosong. Server sedang memulai ulang untuk menyiapkan QR Code baru... (Refresh halaman /qr dalam 10 detik)."))
+		go func() {
+			client.Disconnect()
+			os.Exit(0)
+		}()
 		return
 	}
 
@@ -261,7 +279,9 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 	var imageBytes []byte
 	var mimeType string
 	if req.ImageURL != "" {
-		imgResp, err := http.Get(req.ImageURL)
+		// Gunakan custom HTTP client dengan timeout
+		httpClient := &http.Client{Timeout: 30 * time.Second}
+		imgResp, err := httpClient.Get(req.ImageURL)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to download image URL: %v", err), http.StatusBadRequest)
 			return
@@ -272,7 +292,13 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("Image URL returned status code %d", imgResp.StatusCode), http.StatusBadRequest)
 			return
 		}
-		imageBytes, _ = io.ReadAll(imgResp.Body)
+		
+		// Batasi maksimal 15MB untuk mencegah server crash (OOM)
+		imageBytes, err = io.ReadAll(io.LimitReader(imgResp.Body, 15*1024*1024))
+		if err != nil {
+			http.Error(w, "Failed to read image", http.StatusInternalServerError)
+			return
+		}
 	} else if req.ImageBase64 != "" {
 		imageBytes, _ = base64.StdEncoding.DecodeString(req.ImageBase64)
 	}
@@ -306,7 +332,9 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Pesan Teks Biasa
-		msg.Conversation = &req.Message
+		msg.ExtendedTextMessage = &waE2E.ExtendedTextMessage{
+			Text: &req.Message,
+		}
 	}
 
 	resp, err := client.SendMessage(context.Background(), targetJID, msg)
