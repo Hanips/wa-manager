@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -961,9 +962,10 @@ type SendRequest struct {
 }
 
 type BroadcastRequest struct {
-	Phones  []string    `json:"phones"`
-	Payload SendRequest `json:"payload"`
-	DelayMs int         `json:"delay_ms"`
+	Phones     []string    `json:"phones"`
+	Payload    SendRequest `json:"payload"`
+	DelayMs    int         `json:"delay_ms"`
+	DelayMsMax int         `json:"delay_ms_max"`
 }
 
 func sendInternal(req SendRequest) (whatsmeow.SendResponse, error) {
@@ -1148,15 +1150,19 @@ func handleBroadcast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go func(phones []string, payload SendRequest, delay int) {
+	go func(phones []string, payload SendRequest, delay int, delayMax int) {
 		for _, phone := range phones {
 			payload.Phone = phone
 			sendInternal(payload)
-			if delay > 0 {
+			
+			if delayMax > delay && delay >= 0 {
+				sleepTime := delay + rand.Intn(delayMax-delay)
+				time.Sleep(time.Duration(sleepTime) * time.Millisecond)
+			} else if delay > 0 {
 				time.Sleep(time.Duration(delay) * time.Millisecond)
 			}
 		}
-	}(req.Phones, req.Payload, req.DelayMs)
+	}(req.Phones, req.Payload, req.DelayMs, req.DelayMsMax)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
