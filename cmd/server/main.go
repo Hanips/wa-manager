@@ -242,7 +242,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 		statusColor = "#10b981" // green
 	}
 
-	html := fmt.Sprintf(`
+	htmlTemplate := `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -309,8 +309,8 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background-color: %s;
-            box-shadow: 0 0 10px %s;
+            background-color: {{STATUS_COLOR}};
+            box-shadow: 0 0 10px {{STATUS_COLOR}};
         }
         .form-group {
             margin-bottom: 1.5rem;
@@ -430,7 +430,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
                 <h1 class="title">WA Manager</h1>
                 <div class="status-badge">
                     <div class="status-dot"></div>
-                    %s
+                    {{STATUS_TEXT}}
                 </div>
             </div>
 
@@ -579,8 +579,10 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
         }
     </script>
 </body>
-</html>
-	`, statusColor, statusColor, status)
+</html>`
+
+	html := strings.ReplaceAll(htmlTemplate, "{{STATUS_COLOR}}", statusColor)
+	html = strings.ReplaceAll(html, "{{STATUS_TEXT}}", status)
 
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(html))
@@ -667,8 +669,8 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
         <div class="icon">
             <svg width="32" height="32" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
         </div>
-        <h1 class="title">%s</h1>
-        <p class="subtitle">%s</p>
+        <h1 class="title">{{TITLE}}</h1>
+        <p class="subtitle">{{MESSAGE}}</p>
         <a href="/" class="btn-primary">Kembali ke Dashboard</a>
     </div>
     <script>
@@ -677,9 +679,14 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 </body>
 </html>`
 
+	var title, message string
 	if client.Store.ID == nil {
+		title = "Sesi Kosong"
+		message = "Tidak ada perangkat yang terhubung. Server sedang me-restart untuk menyiapkan QR Code baru... (Otomatis beralih ke halaman QR dalam 10 detik)"
+		html := strings.ReplaceAll(htmlTemplate, "{{TITLE}}", title)
+		html = strings.ReplaceAll(html, "{{MESSAGE}}", message)
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(fmt.Sprintf(htmlTemplate, "Sesi Kosong", "Tidak ada perangkat yang terhubung. Server sedang me-restart untuk menyiapkan QR Code baru... (Otomatis beralih ke halaman QR dalam 10 detik)")))
+		w.Write([]byte(html))
 		go func() {
 			client.Disconnect()
 			os.Exit(0)
@@ -689,13 +696,17 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	err := client.Logout(context.Background())
 	if err != nil {
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(fmt.Sprintf(htmlTemplate, "Gagal Logout", fmt.Sprintf("Terjadi kesalahan: %v", err))))
-		return
+		title = "Gagal Logout"
+		message = fmt.Sprintf("Terjadi kesalahan: %v", err)
+	} else {
+		title = "Berhasil Logout"
+		message = "Sesi perangkat Anda telah dihapus. Server sedang me-restart untuk menyiapkan QR Code baru... (Otomatis beralih ke halaman QR dalam 10 detik)"
 	}
+	html := strings.ReplaceAll(htmlTemplate, "{{TITLE}}", title)
+	html = strings.ReplaceAll(html, "{{MESSAGE}}", message)
 
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(fmt.Sprintf(htmlTemplate, "Berhasil Logout", "Sesi perangkat Anda telah dihapus. Server sedang me-restart untuk menyiapkan QR Code baru... (Otomatis beralih ke halaman QR dalam 10 detik)")))
+	w.Write([]byte(html))
 
 	// Restart server secara paksa agar whatsmeow membuat jalur QR Code baru
 	go func() {
@@ -761,7 +772,7 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 
 	// Simply redirect to a public QR code generator to show the QR easily
 	qrURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=300x300&color=1d1d1f&bgcolor=ffffff&data=%s", url.QueryEscape(currentQR))
-	html := fmt.Sprintf(`
+	htmlTemplate := `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -863,10 +874,10 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
         
         <div class="qr-wrapper">
             <div class="loader"></div>
-            <img src="%s" alt="WhatsApp QR Code">
+            <img src="{{QR_URL}}" alt="WhatsApp QR Code">
         </div>
 
-        <p class="footer">Memperbarui otomatis dalam <span id="countdown" style="font-weight: bold; color: var(--text-main);">10</span> detik...</p>..</p>
+        <p class="footer">Memperbarui otomatis dalam <span id="countdown" style="font-weight: bold; color: var(--text-main);">10</span> detik...</p>
         <a href="/" class="btn-back">
             <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
             Kembali ke Dashboard
@@ -882,8 +893,9 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
         }, 1000);
     </script>
 </body>
-</html>
-	`, qrURL)
+</html>`
+
+	html := strings.ReplaceAll(htmlTemplate, "{{QR_URL}}", qrURL)
 
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
