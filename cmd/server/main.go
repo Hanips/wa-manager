@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"bytes"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -29,6 +32,7 @@ import (
 var client *whatsmeow.Client
 var qrCode string
 var qrCodeMu sync.RWMutex
+var appDB *sql.DB
 
 func main() {
 	dbLog := waLog.Stdout("Database", "INFO", true)
@@ -42,6 +46,20 @@ func main() {
 	container, err := sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
+	}
+
+	appDB, err = sql.Open("postgres", dbURL)
+	if err == nil {
+		_, err = appDB.Exec(`CREATE TABLE IF NOT EXISTS wa_settings (key text PRIMARY KEY, value text)`)
+		if err != nil {
+			log.Printf("Warning: failed to create wa_settings table: %v", err)
+		}
+		_, err = appDB.Exec(`CREATE TABLE IF NOT EXISTS wa_poll_options (msg_id text, option_hash text, option_text text)`)
+		if err != nil {
+			log.Printf("Warning: failed to create wa_poll_options table: %v", err)
+		}
+	} else {
+		log.Printf("Warning: failed to open direct DB connection: %v", err)
 	}
 
 	// Get the first linked device
@@ -101,7 +119,10 @@ func main() {
 	http.HandleFunc("/ping", handlePing)
 	http.HandleFunc("/qr", handleQR)
 	http.HandleFunc("/send", handleSend)
+	http.HandleFunc("/broadcast", handleBroadcast)
 	http.HandleFunc("/logout", handleLogout)
+	http.HandleFunc("/api/verify", handleVerify)
+	http.HandleFunc("/api/webhook", handleWebhookApi)
 
 	server := &http.Server{Addr: ":" + port}
 
@@ -136,6 +157,36 @@ func eventHandler(evt interface{}) {
 			return
 		}
 
+		// Handle Poll Update Message
+		if v.Message.GetPollUpdateMessage() != nil {
+			pollVote, err := client.DecryptPollVote(context.Background(), v)
+			if err == nil && len(pollVote.GetSelectedOptions()) > 0 {
+				go func(sender string, name string) {
+					if appDB == nil { return }
+					var hookURL string
+					err := appDB.QueryRow("SELECT value FROM wa_settings WHERE key = 'webhook_url'").Scan(&hookURL)
+					if err == nil && hookURL != "" {
+						firstHash := fmt.Sprintf("%X", pollVote.GetSelectedOptions()[0])
+						var optionText string
+						msgId := v.Message.GetPollUpdateMessage().GetPollCreationMessageKey().GetID()
+						errDB := appDB.QueryRow("SELECT option_text FROM wa_poll_options WHERE msg_id = $1 AND option_hash = $2", msgId, firstHash).Scan(&optionText)
+						if errDB != nil { optionText = "PollVote:" + firstHash }
+
+						payload := map[string]string{
+							"sender": sender,
+							"name": name,
+							"message": optionText,
+							"type": "poll_vote",
+							"timestamp": time.Now().Format(time.RFC3339),
+						}
+						body, _ := json.Marshal(payload)
+						http.Post(hookURL, "application/json", bytes.NewBuffer(body))
+					}
+				}(v.Info.Sender.User, v.Info.PushName)
+			}
+			return
+		}
+
 		// Ambil teks pesan
 		msgText := ""
 		if v.Message.GetConversation() != "" {
@@ -143,6 +194,23 @@ func eventHandler(evt interface{}) {
 		} else if v.Message.GetExtendedTextMessage() != nil {
 			msgText = v.Message.GetExtendedTextMessage().GetText()
 		}
+
+		// Panggil Webhook jika ada
+		go func(sender string, name string, text string) {
+			if appDB == nil { return }
+			var hookURL string
+			err := appDB.QueryRow("SELECT value FROM wa_settings WHERE key = 'webhook_url'").Scan(&hookURL)
+			if err == nil && hookURL != "" {
+				payload := map[string]string{
+					"sender": sender,
+					"name": name,
+					"message": text,
+					"timestamp": time.Now().Format(time.RFC3339),
+				}
+				body, _ := json.Marshal(payload)
+				http.Post(hookURL, "application/json", bytes.NewBuffer(body))
+			}
+		}(v.Info.Sender.User, v.Info.PushName, msgText)
 
 		// Jika ada yang chat "tes"
 		if strings.ToLower(strings.TrimSpace(msgText)) == "tes" {
@@ -342,7 +410,21 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="container" id="lockScreen">
+        <div class="card" style="max-width: 400px; margin: 0 auto; text-align: center;">
+            <div style="display:inline-flex; align-items:center; justify-content:center; width:64px; height:64px; border-radius:50%; background:rgba(16,185,129,0.1); color:var(--primary); margin-bottom:1.5rem;">
+                <svg width="32" height="32" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+            </div>
+            <h1 class="title" style="font-size:1.5rem;">Akses Tertutup</h1>
+            <p class="label" style="margin-bottom: 2rem;">Masukkan API Key untuk membuka WA Manager</p>
+            <div class="form-group">
+                <input type="password" id="lockApiKey" class="input" placeholder="API_KEY" onkeypress="if(event.key === 'Enter') verifyKey()">
+            </div>
+            <button class="btn btn-primary" onclick="verifyKey()" id="btnVerify">Buka Kunci</button>
+        </div>
+    </div>
+
+    <div class="container" id="dashboardScreen" style="display: none; opacity: 0; transition: opacity 0.5s;">
         <div class="card">
             <div class="header">
                 <h1 class="title">WA Manager</h1>
@@ -352,10 +434,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
                 </div>
             </div>
 
-            <div class="form-group">
-                <label class="label">API Key</label>
-                <input type="password" id="apiKey" class="input" placeholder="Masukkan API_KEY Anda (Jika Ada)" oninput="updateLinks()">
-            </div>
+            <input type="hidden" id="apiKey">
 
             <div class="actions">
                 <a href="/qr" id="linkQr" class="btn btn-primary">
@@ -366,6 +445,16 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
                     <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
                     Logout Sesi
                 </a>
+            </div>
+
+            <div class="test-section" style="margin-bottom: 2rem;">
+                <h2 class="test-title">Pengaturan Webhook</h2>
+                <div class="form-group">
+                    <input type="text" id="webhookUrl" class="input" placeholder="https://domain.com/webhook (Kosongkan untuk off)">
+                </div>
+                <button class="btn btn-primary" onclick="saveWebhook()" id="saveHookBtn">
+                    Simpan Webhook
+                </button>
             </div>
 
             <div class="test-section">
@@ -386,11 +475,55 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
     <div id="toast">Notifikasi</div>
 
     <script>
-        function updateLinks() {
+        async function verifyKey() {
+            const key = document.getElementById('lockApiKey').value;
+            const btn = document.getElementById('btnVerify');
+            btn.innerHTML = 'Memverifikasi...';
+            try {
+                const res = await fetch('/api/verify?key=' + encodeURIComponent(key));
+                if (res.ok) {
+                    document.getElementById('apiKey').value = key;
+                    const param = key ? '?key=' + encodeURIComponent(key) : '';
+                    document.getElementById('linkQr').href = '/qr' + param;
+                    document.getElementById('linkLogout').href = '/logout' + param;
+                    
+                    document.getElementById('lockScreen').style.display = 'none';
+                    const db = document.getElementById('dashboardScreen');
+                    db.style.display = 'block';
+                    setTimeout(() => db.style.opacity = '1', 50);
+
+                    // Fetch current webhook
+                    const hookRes = await fetch('/api/webhook?key=' + encodeURIComponent(key));
+                    if (hookRes.ok) {
+                        const hookData = await hookRes.json();
+                        document.getElementById('webhookUrl').value = hookData.webhook_url || '';
+                    }
+                } else {
+                    showToast('API Key Salah!', true);
+                }
+            } catch (e) {
+                showToast('Koneksi Error', true);
+            }
+            btn.innerHTML = 'Buka Kunci';
+        }
+
+        async function saveWebhook() {
             const key = document.getElementById('apiKey').value;
-            const param = key ? '?key=' + encodeURIComponent(key) : '';
-            document.getElementById('linkQr').href = '/qr' + param;
-            document.getElementById('linkLogout').href = '/logout' + param;
+            const url = document.getElementById('webhookUrl').value;
+            const btn = document.getElementById('saveHookBtn');
+            btn.innerHTML = 'Menyimpan...';
+            try {
+                const res = await fetch('/api/webhook?key=' + encodeURIComponent(key), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ webhook_url: url })
+                });
+                if (res.ok) showToast('Webhook berhasil disimpan!');
+                else showToast('Gagal menyimpan webhook', true);
+            } catch (e) {
+                showToast('Error', true);
+            }
+            btn.innerHTML = 'Simpan Webhook';
         }
 
         function showToast(msg, isError = false) {
@@ -626,7 +759,8 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Simply redirect to a public QR code generator to show the QR eas	qrURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=300x300&color=1d1d1f&bgcolor=ffffff&data=%s", url.QueryEscape(currentQR))
+	// Simply redirect to a public QR code generator to show the QR easily
+	qrURL := fmt.Sprintf("https://api.qrserver.com/v1/create-qr-code/?size=300x300&color=1d1d1f&bgcolor=ffffff&data=%s", url.QueryEscape(currentQR))
 	html := fmt.Sprintf(`
 <!DOCTYPE html>
 <html lang="en">
@@ -757,13 +891,151 @@ func handleQR(w http.ResponseWriter, r *http.Request) {
 }
 
 type SendRequest struct {
-	Phone          string `json:"phone"`
-	Message        string `json:"message"`
-	ImageURL       string `json:"image_url"`
-	ImageBase64    string `json:"image_base64"`
-	DocumentURL    string `json:"document_url"`
-	DocumentBase64 string `json:"document_base64"`
-	FileName       string `json:"file_name"`
+	Phone          string  `json:"phone"`
+	Message        string  `json:"message"`
+	ImageURL       string  `json:"image_url"`
+	ImageBase64    string  `json:"image_base64"`
+	DocumentURL    string  `json:"document_url"`
+	DocumentBase64 string  `json:"document_base64"`
+	FileName       string  `json:"file_name"`
+	ContactName    string  `json:"contact_name"`
+	ContactVcard   string   `json:"contact_vcard"`
+	LocationLat    float64  `json:"location_lat"`
+	LocationLng    float64  `json:"location_lng"`
+	LocationName   string   `json:"location_name"`
+	PollName       string   `json:"poll_name"`
+	PollOptions    []string `json:"poll_options"`
+	PollSelectable int      `json:"poll_selectable"`
+}
+
+type BroadcastRequest struct {
+	Phones  []string    `json:"phones"`
+	Payload SendRequest `json:"payload"`
+	DelayMs int         `json:"delay_ms"`
+}
+
+func sendInternal(req SendRequest) (whatsmeow.SendResponse, error) {
+	if client.Store.ID == nil {
+		return whatsmeow.SendResponse{}, fmt.Errorf("WhatsApp client not logged in")
+	}
+
+	var targetJID types.JID
+	if strings.Contains(req.Phone, "@g.us") || strings.Contains(req.Phone, "-") {
+		// Group
+		cleanPhone := strings.ReplaceAll(req.Phone, "@g.us", "")
+		targetJID = types.NewJID(cleanPhone, types.GroupServer)
+	} else {
+		// User
+		cleanPhone := strings.ReplaceAll(req.Phone, "+", "")
+		cleanPhone = strings.ReplaceAll(cleanPhone, " ", "")
+		cleanPhone = strings.ReplaceAll(cleanPhone, "-", "")
+		targetJID = types.NewJID(cleanPhone, types.DefaultUserServer)
+	}
+
+	var mediaBytes []byte
+	var isDocument bool
+
+	if req.DocumentURL != "" || req.DocumentBase64 != "" {
+		isDocument = true
+		if req.DocumentURL != "" {
+			httpClient := &http.Client{Timeout: 60 * time.Second}
+			mediaReq, err := http.NewRequest("GET", req.DocumentURL, nil)
+			if err != nil { return whatsmeow.SendResponse{}, fmt.Errorf("Invalid document URL: %v", err) }
+			mediaReq.Header.Set("User-Agent", "Mozilla/5.0")
+			mediaResp, err := httpClient.Do(mediaReq)
+			if err != nil { return whatsmeow.SendResponse{}, fmt.Errorf("Failed to download document: %v", err) }
+			defer mediaResp.Body.Close()
+			if mediaResp.StatusCode != 200 { return whatsmeow.SendResponse{}, fmt.Errorf("Document URL returned %d", mediaResp.StatusCode) }
+			mediaBytes, err = io.ReadAll(io.LimitReader(mediaResp.Body, 50*1024*1024))
+			if err != nil { return whatsmeow.SendResponse{}, err }
+		} else {
+			var err error
+			mediaBytes, err = base64.StdEncoding.DecodeString(req.DocumentBase64)
+			if err != nil { return whatsmeow.SendResponse{}, err }
+		}
+	} else if req.ImageURL != "" || req.ImageBase64 != "" {
+		if req.ImageURL != "" {
+			httpClient := &http.Client{Timeout: 30 * time.Second}
+			mediaReq, err := http.NewRequest("GET", req.ImageURL, nil)
+			if err != nil { return whatsmeow.SendResponse{}, fmt.Errorf("Invalid image URL: %v", err) }
+			mediaReq.Header.Set("User-Agent", "Mozilla/5.0")
+			mediaResp, err := httpClient.Do(mediaReq)
+			if err != nil { return whatsmeow.SendResponse{}, fmt.Errorf("Failed to download image: %v", err) }
+			defer mediaResp.Body.Close()
+			if mediaResp.StatusCode != 200 { return whatsmeow.SendResponse{}, fmt.Errorf("Image URL returned %d", mediaResp.StatusCode) }
+			mediaBytes, err = io.ReadAll(io.LimitReader(mediaResp.Body, 15*1024*1024))
+			if err != nil { return whatsmeow.SendResponse{}, err }
+		} else {
+			var err error
+			mediaBytes, err = base64.StdEncoding.DecodeString(req.ImageBase64)
+			if err != nil { return whatsmeow.SendResponse{}, err }
+		}
+	}
+
+	var msg *waE2E.Message
+	if req.PollName != "" && len(req.PollOptions) > 0 {
+		selectable := req.PollSelectable
+		if selectable <= 0 { selectable = 1 }
+		msg = client.BuildPollCreation(req.PollName, req.PollOptions, selectable)
+	} else {
+		msg = &waE2E.Message{}
+	}
+
+	if msg.PollCreationMessage == nil {
+		if len(mediaBytes) > 0 {
+		mimeType := http.DetectContentType(mediaBytes)
+		if isDocument {
+			uploaded, err := client.Upload(context.Background(), mediaBytes, whatsmeow.MediaDocument)
+			if err != nil { return whatsmeow.SendResponse{}, err }
+			fileName := req.FileName
+			if fileName == "" { fileName = "document.pdf" }
+			msg.DocumentMessage = &waE2E.DocumentMessage{
+				Caption: proto.String(req.Message), Mimetype: proto.String(mimeType),
+				FileName: proto.String(fileName), URL: &uploaded.URL,
+				DirectPath: &uploaded.DirectPath, MediaKey: uploaded.MediaKey,
+				FileEncSHA256: uploaded.FileEncSHA256, FileSHA256: uploaded.FileSHA256,
+				FileLength: proto.Uint64(uploaded.FileLength),
+			}
+		} else {
+			uploaded, err := client.Upload(context.Background(), mediaBytes, whatsmeow.MediaImage)
+			if err != nil { return whatsmeow.SendResponse{}, err }
+			msg.ImageMessage = &waE2E.ImageMessage{
+				Caption: proto.String(req.Message), Mimetype: proto.String(mimeType),
+				URL: &uploaded.URL, DirectPath: &uploaded.DirectPath,
+				MediaKey: uploaded.MediaKey, FileEncSHA256: uploaded.FileEncSHA256,
+				FileSHA256: uploaded.FileSHA256, FileLength: proto.Uint64(uploaded.FileLength),
+			}
+		}
+	} else if req.ContactVcard != "" {
+		msg.ContactMessage = &waE2E.ContactMessage{
+			DisplayName: proto.String(req.ContactName),
+			Vcard:       proto.String(req.ContactVcard),
+		}
+	} else if req.LocationLat != 0 && req.LocationLng != 0 {
+		msg.LocationMessage = &waE2E.LocationMessage{
+			DegreesLatitude:  proto.Float64(req.LocationLat),
+			DegreesLongitude: proto.Float64(req.LocationLng),
+			Name:             proto.String(req.LocationName),
+			Address:          proto.String(req.Message),
+		}
+	} else {
+		msg.ExtendedTextMessage = &waE2E.ExtendedTextMessage{
+			Text: &req.Message,
+		}
+	}
+	}
+
+
+
+	resp, err := client.SendMessage(context.Background(), targetJID, msg)
+	if err == nil && req.PollName != "" && appDB != nil {
+		for _, opt := range req.PollOptions {
+			h := sha256.Sum256([]byte(opt))
+			hashHex := fmt.Sprintf("%X", h)
+			appDB.Exec("INSERT INTO wa_poll_options (msg_id, option_hash, option_text) VALUES ($1, $2, $3)", resp.ID, hashHex, opt)
+		}
+	}
+	return resp, err
 }
 
 func handleSend(w http.ResponseWriter, r *http.Request) {
@@ -773,12 +1045,9 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiKey := os.Getenv("API_KEY")
-	if apiKey != "" {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader != "Bearer "+apiKey {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if apiKey != "" && r.Header.Get("Authorization") != "Bearer "+apiKey {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	var req SendRequest
@@ -787,172 +1056,112 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Phone == "" || (req.Message == "" && req.ImageURL == "" && req.ImageBase64 == "" && req.DocumentURL == "" && req.DocumentBase64 == "") {
-		http.Error(w, "Phone and (message or image or document) are required", http.StatusBadRequest)
+	if req.Phone == "" {
+		http.Error(w, "Phone is required", http.StatusBadRequest)
 		return
 	}
 
-	if client.Store.ID == nil {
-		http.Error(w, "WhatsApp client not logged in", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Sanitize phone number (hapus spasi, tanda tambah, strip)
-	cleanPhone := strings.ReplaceAll(req.Phone, "+", "")
-	cleanPhone = strings.ReplaceAll(cleanPhone, " ", "")
-	cleanPhone = strings.ReplaceAll(cleanPhone, "-", "")
-
-	// Parse JID (e.g. 628123456789)
-	targetJID := types.NewJID(cleanPhone, types.DefaultUserServer)
-
-	// Proses Media jika ada
-	var mediaBytes []byte
-	var isDocument bool
-
-	if req.DocumentURL != "" || req.DocumentBase64 != "" {
-		isDocument = true
-		if req.DocumentURL != "" {
-			httpClient := &http.Client{Timeout: 60 * time.Second}
-			mediaReq, err := http.NewRequest("GET", req.DocumentURL, nil)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Invalid document URL: %v", err), http.StatusBadRequest)
-				return
-			}
-			mediaReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-			
-			mediaResp, err := httpClient.Do(mediaReq)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to download document URL: %v", err), http.StatusBadRequest)
-				return
-			}
-			defer mediaResp.Body.Close()
-
-			if mediaResp.StatusCode != 200 {
-				http.Error(w, fmt.Sprintf("Document URL returned status code %d", mediaResp.StatusCode), http.StatusBadRequest)
-				return
-			}
-			
-			// Batasi maksimal 50MB untuk dokumen
-			mediaBytes, err = io.ReadAll(io.LimitReader(mediaResp.Body, 50*1024*1024))
-			if err != nil {
-				http.Error(w, "Failed to read document", http.StatusInternalServerError)
-				return
-			}
-		} else if req.DocumentBase64 != "" {
-			var err error
-			mediaBytes, err = base64.StdEncoding.DecodeString(req.DocumentBase64)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Invalid base64 string: %v", err), http.StatusBadRequest)
-				return
-			}
-		}
-	} else if req.ImageURL != "" || req.ImageBase64 != "" {
-		if req.ImageURL != "" {
-			httpClient := &http.Client{Timeout: 30 * time.Second}
-			mediaReq, err := http.NewRequest("GET", req.ImageURL, nil)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Invalid image URL: %v", err), http.StatusBadRequest)
-				return
-			}
-			mediaReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-			
-			mediaResp, err := httpClient.Do(mediaReq)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to download image URL: %v", err), http.StatusBadRequest)
-				return
-			}
-			defer mediaResp.Body.Close()
-
-			if mediaResp.StatusCode != 200 {
-				http.Error(w, fmt.Sprintf("Image URL returned status code %d", mediaResp.StatusCode), http.StatusBadRequest)
-				return
-			}
-			
-			// Batasi maksimal 15MB untuk gambar
-			mediaBytes, err = io.ReadAll(io.LimitReader(mediaResp.Body, 15*1024*1024))
-			if err != nil {
-				http.Error(w, "Failed to read image", http.StatusInternalServerError)
-				return
-			}
-		} else if req.ImageBase64 != "" {
-			var err error
-			mediaBytes, err = base64.StdEncoding.DecodeString(req.ImageBase64)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Invalid base64 string: %v", err), http.StatusBadRequest)
-				return
-			}
-		}
-	}
-
-	// Build the message
-	msg := &waE2E.Message{}
-
-	if len(mediaBytes) > 0 {
-		mimeType := http.DetectContentType(mediaBytes)
-		
-		if isDocument {
-			uploaded, err := client.Upload(context.Background(), mediaBytes, whatsmeow.MediaDocument)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to upload document to WhatsApp: %v", err), http.StatusInternalServerError)
-				return
-			}
-			
-			fileName := req.FileName
-			if fileName == "" {
-				fileName = "document.pdf"
-			}
-			
-			msg.DocumentMessage = &waE2E.DocumentMessage{
-				Caption:       proto.String(req.Message),
-				Mimetype:      proto.String(mimeType),
-				FileName:      proto.String(fileName),
-				URL:           &uploaded.URL,
-				DirectPath:    &uploaded.DirectPath,
-				MediaKey:      uploaded.MediaKey,
-				FileEncSHA256: uploaded.FileEncSHA256,
-				FileSHA256:    uploaded.FileSHA256,
-				FileLength:    proto.Uint64(uploaded.FileLength),
-			}
-		} else {
-			if !strings.HasPrefix(mimeType, "image/") {
-				http.Error(w, fmt.Sprintf("Invalid image file. Detected format: %s", mimeType), http.StatusBadRequest)
-				return
-			}
-
-			uploaded, err := client.Upload(context.Background(), mediaBytes, whatsmeow.MediaImage)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to upload image to WhatsApp: %v", err), http.StatusInternalServerError)
-				return
-			}
-
-			msg.ImageMessage = &waE2E.ImageMessage{
-				Caption:       proto.String(req.Message),
-				Mimetype:      proto.String(mimeType),
-				URL:           &uploaded.URL,
-				DirectPath:    &uploaded.DirectPath,
-				MediaKey:      uploaded.MediaKey,
-				FileEncSHA256: uploaded.FileEncSHA256,
-				FileSHA256:    uploaded.FileSHA256,
-				FileLength:    proto.Uint64(uploaded.FileLength),
-			}
-		}
-	} else {
-		// Pesan Teks Biasa
-		msg.ExtendedTextMessage = &waE2E.ExtendedTextMessage{
-			Text: &req.Message,
-		}
-	}
-
-	resp, err := client.SendMessage(context.Background(), targetJID, msg)
+	resp, err := sendInternal(req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to send message: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status":    "success",
-		"messageId": resp.ID,
-		"timestamp": fmt.Sprintf("%v", resp.Timestamp),
+		"status": "success", "messageId": resp.ID, "timestamp": fmt.Sprintf("%v", resp.Timestamp),
 	})
+}
+
+func handleBroadcast(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	apiKey := os.Getenv("API_KEY")
+	if apiKey != "" && r.Header.Get("Authorization") != "Bearer "+apiKey {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req BroadcastRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Phones) == 0 {
+		http.Error(w, "No phones provided", http.StatusBadRequest)
+		return
+	}
+
+	go func(phones []string, payload SendRequest, delay int) {
+		for _, phone := range phones {
+			payload.Phone = phone
+			sendInternal(payload)
+			if delay > 0 {
+				time.Sleep(time.Duration(delay) * time.Millisecond)
+			}
+		}
+	}(req.Phones, req.Payload, req.DelayMs)
+
+	w.WriteHeader(http.StatusAccepted)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "processing",
+		"message": fmt.Sprintf("Broadcasting to %d numbers in background", len(req.Phones)),
+	})
+}
+
+func handleVerify(w http.ResponseWriter, r *http.Request) {
+	apiKey := os.Getenv("API_KEY")
+	reqKey := r.URL.Query().Get("key")
+	w.Header().Set("Content-Type", "application/json")
+	if apiKey == "" || reqKey == apiKey {
+		json.NewEncoder(w).Encode(map[string]bool{"valid": true})
+	} else {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]bool{"valid": false})
+	}
+}
+
+func handleWebhookApi(w http.ResponseWriter, r *http.Request) {
+	apiKey := os.Getenv("API_KEY")
+	if apiKey != "" && r.URL.Query().Get("key") != apiKey {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == "GET" {
+		var hookURL string
+		if appDB != nil {
+			appDB.QueryRow("SELECT value FROM wa_settings WHERE key = 'webhook_url'").Scan(&hookURL)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"webhook_url": hookURL})
+		return
+	}
+
+	if r.Method == "POST" {
+		var req struct {
+			WebhookURL string `json:"webhook_url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if appDB != nil {
+			_, err := appDB.Exec("INSERT INTO wa_settings (key, value) VALUES ('webhook_url', $1) ON CONFLICT (key) DO UPDATE SET value = $1", req.WebhookURL)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+		return
+	}
+	
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
