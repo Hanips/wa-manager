@@ -165,7 +165,13 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Write([]byte("✅ Berhasil Logout! WhatsApp lama sudah diputus. Silakan buka /qr untuk menautkan nomor WA yang baru."))
+	w.Write([]byte("✅ Berhasil Logout! Server sedang memulai ulang untuk menyiapkan QR Code baru... (Refresh halaman /qr dalam 10 detik)."))
+	
+	// Restart server secara paksa agar whatsmeow membuat jalur QR Code baru
+	go func() {
+		client.Disconnect()
+		os.Exit(0)
+	}()
 }
 
 func handleQR(w http.ResponseWriter, r *http.Request) {
