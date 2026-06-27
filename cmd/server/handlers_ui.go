@@ -73,8 +73,12 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	err := client.Logout(context.Background())
 	if err != nil {
-		title = "Gagal Logout"
-		message = fmt.Sprintf("Terjadi kesalahan: %v", err)
+		// Jika gagal ke server WA (misal timeout/disconnect), HAPUS PAKSA sesi lokal
+		if client.Store != nil {
+			client.Store.Delete(context.Background())
+		}
+		title = "Sesi Dihapus Paksa"
+		message = "Koneksi ke server terputus saat logout, namun sesi lokal Anda berhasil dibersihkan. Anda bisa login ulang."
 	} else {
 		title = "Berhasil Logout"
 		message = "Sesi perangkat Anda telah dihapus. Otomatis beralih ke halaman QR dalam 15 detik."

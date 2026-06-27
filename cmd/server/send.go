@@ -253,6 +253,10 @@ func handleBroadcast(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No phones provided", http.StatusBadRequest)
 		return
 	}
+	if len(req.Phones) > 1000 {
+		http.Error(w, "Maksimal 1000 nomor per broadcast untuk mencegah antrean macet", http.StatusBadRequest)
+		return
+	}
 
 	go func(phones []string, payload SendRequest, delay int, delayMax int) {
 		for _, phone := range phones {

@@ -52,6 +52,11 @@ func handleWebhookApi(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if len(req.WebhookURLs) > 10 {
+			http.Error(w, "Maksimal 10 URL webhook", http.StatusBadRequest)
+			return
+		}
+
 		urlsBytes, _ := json.Marshal(req.WebhookURLs)
 		if appDB != nil {
 			_, err := appDB.Exec("INSERT INTO wa_settings (key, value) VALUES ('webhook_urls', $1) ON CONFLICT (key) DO UPDATE SET value = $1", string(urlsBytes))

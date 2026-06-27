@@ -37,7 +37,8 @@ func main() {
 	}
 
 	// Connect to PostgreSQL (Neon.tech or similar)
-	container, err := sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
+	var err error
+	waContainer, err = sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -62,7 +63,7 @@ func main() {
 	}
 
 	// Get the first linked device
-	deviceStore, err := container.GetFirstDevice(context.Background())
+	deviceStore, err := waContainer.GetFirstDevice(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to get device: %v", err)
 	}

@@ -33,9 +33,14 @@ func eventHandler(evt interface{}) {
 	case events.PermanentDisconnect:
 		desc := v.PermanentDisconnectDescription()
 		fmt.Printf("Permanent Disconnect: %s\n", desc)
-		// Untuk semua jenis permanent disconnect (termasuk LoggedOut dari HP),
-		// mulai ulang QR flow tanpa crash server.
+		// Untuk semua jenis permanent disconnect
 		fmt.Println("Memulai ulang QR flow di background...")
+		go func() {
+			time.Sleep(3 * time.Second)
+			startQRFlow()
+		}()
+	case *events.LoggedOut:
+		fmt.Printf("Device logged out! Reason: %v\n", v.Reason)
 		go func() {
 			time.Sleep(3 * time.Second)
 			startQRFlow()
