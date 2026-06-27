@@ -122,7 +122,7 @@ func eventHandler(evt interface{}) {
 
 		// Jika ada yang chat "tes"
 		if strings.ToLower(strings.TrimSpace(msgText)) == "tes" {
-			replyText := "✅ WA Manager Status: AKTIF & SIAP!\nServer berjalan di Render Cloud."
+			replyText := "✅ WhatsMeong Status: AKTIF & SIAP!\nServer berjalan di Render Cloud."
 			replyMsg := &waE2E.Message{
 				Conversation: &replyText,
 			}

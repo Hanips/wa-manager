@@ -1,4 +1,4 @@
-# 📚 WA Manager API Documentation (Super Lengkap)
+# 📚 WhatsMeong API Documentation (Super Lengkap)
 
 Berikut adalah dokumentasi lengkap penggunaan (*cURL*) untuk seluruh fitur yang ada di sistem, dari pengiriman teks perorangan biasa, gambar base64, dokumen, hingga fitur premium seperti *Broadcast* dan *Polling*.
 
@@ -281,7 +281,7 @@ if ($httpCode >= 200 && $httpCode < 300) {
 ---
 
 ## 13. 📋 Struktur Webhook Payload (Data Balasan)
-Jika Anda menggunakan webhook (seperti Make.com atau n8n), ini adalah bentuk format JSON yang akan dikirim server WA-Manager ke URL webhook Anda setiap kali ada pesan masuk atau jawaban *Polling*.
+Jika Anda menggunakan webhook (seperti Make.com atau n8n), ini adalah bentuk format JSON yang akan dikirim server WhatsMeong ke URL webhook Anda setiap kali ada pesan masuk atau jawaban *Polling*.
 
 **Contoh Payload Pesan Teks/Media:**
 ```json

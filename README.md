@@ -1,6 +1,6 @@
-# WA-Manager (Free-Tier Architecture)
+# WhatsMeong (Free-Tier Architecture)
 
-**WA-Manager** is a standalone REST API Gateway and Web Dashboard for WhatsApp, built on top of the open-source [**whatsmeow**](https://github.com/tulir/whatsmeow) library. 
+**WhatsMeong** is a standalone REST API Gateway and Web Dashboard for WhatsApp, built on top of the open-source [**whatsmeow**](https://github.com/tulir/whatsmeow) library. 
 
 This project has been heavily modified and optimized to run **100% reliably on Free-Tier Cloud Infrastructure** without experiencing memory leaks, crashes, or data corruption.
 
@@ -17,7 +17,7 @@ This system is designed with a stateless API approach and crash-proof concurrenc
 The core architecture consists of:
 
 1. ☁️ **Render.com (Web Service - Free Tier)**
-   Acts as the primary host for the Golang application. Render automatically spins down (sleeps) the application if there is no traffic for 15 minutes. WA-Manager is equipped with a self-healing reconnection mechanism to handle these restarts gracefully without losing your WhatsApp session.
+   Acts as the primary host for the Golang application. Render automatically spins down (sleeps) the application if there is no traffic for 15 minutes. WhatsMeong is equipped with a self-healing reconnection mechanism to handle these restarts gracefully without losing your WhatsApp session.
    
 2. 🐘 **Neon.tech (PostgreSQL - Serverless Free Tier)**
    Because Render's free tier uses an ephemeral filesystem, the default SQLite store used by `whatsmeow` for WhatsApp sessions has been completely migrated to an external PostgreSQL database via Neon.tech. This ensures session persistence across container restarts.
