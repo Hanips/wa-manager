@@ -179,3 +179,129 @@ curl -X POST "https://wa-manager-mkvg.onrender.com/api/webhook?key=hanief123321"
     ]
   }'
 ```
+
+---
+
+## 10. 💻 Implementasi di Node.js (Axios)
+Contoh penggunaan API menggunakan pustaka `axios` di Node.js (misal untuk backend Express, NestJS, atau skrip cron).
+
+```javascript
+const axios = require('axios');
+
+const API_URL = "https://wa-manager-mkvg.onrender.com/send";
+const API_KEY = "hanief123321";
+
+async function sendWhatsApp() {
+  try {
+    const response = await axios.post(API_URL, {
+      phone: "6285779336660",
+      message: "Pesan ini dikirim otomatis dari Node.js!"
+    }, {
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log("Berhasil:", response.data);
+  } catch (error) {
+    console.error("Gagal mengirim:", error.response ? error.response.data : error.message);
+  }
+}
+
+sendWhatsApp();
+```
+
+---
+
+## 11. 🐍 Implementasi di Python (Requests)
+Contoh penggunaan API menggunakan pustaka `requests` di Python (misal untuk Bot, AI Automation, atau Web Scraper).
+
+```python
+import requests
+
+API_URL = "https://wa-manager-mkvg.onrender.com/send"
+API_KEY = "hanief123321"
+
+headers = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
+
+payload = {
+    "phone": "6285779336660",
+    "message": "Halo dari skrip Python! 🚀"
+}
+
+try:
+    response = requests.post(API_URL, json=payload, headers=headers)
+    response.raise_for_status() # Raise exception jika error
+    print("Berhasil:", response.json())
+except requests.exceptions.RequestException as e:
+    print("Error:", e)
+```
+
+---
+
+## 12. 🐘 Implementasi di PHP (cURL)
+Contoh penggunaan API menggunakan cURL murni di PHP (misal untuk web Laravel, CodeIgniter, atau integrasi form kontak).
+
+```php
+<?php
+
+$apiUrl = 'https://wa-manager-mkvg.onrender.com/send';
+$apiKey = 'hanief123321';
+
+$data = [
+    'phone' => '6285779336660',
+    'message' => 'Notifikasi dari website PHP Anda!'
+];
+
+$ch = curl_init($apiUrl);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Authorization: Bearer ' . $apiKey,
+    'Content-Type: application/json'
+]);
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+if ($httpCode >= 200 && $httpCode < 300) {
+    echo "Berhasil: " . $response;
+} else {
+    echo "Gagal HTTP Code $httpCode : " . $response;
+}
+?>
+```
+
+---
+
+## 13. 📋 Struktur Webhook Payload (Data Balasan)
+Jika Anda menggunakan webhook (seperti Make.com atau n8n), ini adalah bentuk format JSON yang akan dikirim server WA-Manager ke URL webhook Anda setiap kali ada pesan masuk atau jawaban *Polling*.
+
+**Contoh Payload Pesan Teks/Media:**
+```json
+{
+  "sender": "6285779336660",
+  "name": "Hanief Neuralens",
+  "chat": "6285779336660@s.whatsapp.net",
+  "message": "Halo, saya tertarik dengan layanan Anda",
+  "timestamp": "2026-06-27T10:00:00Z"
+}
+```
+
+**Contoh Payload Jawaban Polling (`type: poll_vote`):**
+```json
+{
+  "sender": "6285779336660",
+  "name": "Hanief Neuralens",
+  "type": "poll_vote",
+  "message": "Predict Ticker", 
+  "timestamp": "2026-06-27T10:05:00Z"
+}
+```
+*(Nilai `message` akan persis mengikuti teks opsi polling yang diklik oleh user).*
